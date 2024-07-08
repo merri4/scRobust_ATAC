@@ -18,7 +18,9 @@ adata_dict = './data/Processed_Filtered_Segerstolpe_HumanPancreas_data.h5ad'
 scRobust.read_adata(adata_dict)
 gene_vocab, tokenizer = scRobust.set_vocab()
 
-scRobust.set_model(hidden = 64*8, n_layers = 1, attn_heads= 8)
+scRobust.set_encoder(hidden = 64*8, n_layers = 1, attn_heads= 8)
+scRobust.set_pretraining_model(hidden = 64*8, att_dropout = 0.3)
+
 ## pre_train scRobust
 scRobust.train_SSL(epoch = 1000, lr = 0.00005, batch_size = 128, n_ge = 250, save_path = './weights/')
 ## load weight
@@ -32,6 +34,17 @@ scRobust_adata = scRobust.get_cell_adata(cell_embeddings, umap = False, tsne = T
 scRobust_adata.obs['label'] = scRobust.adata.obs['label']
 sc.pl.tsne(scRobust_adata, color='label')
 sc.pl.tsne(scRobust_adata, color=['leiden'])
+
+## Downstream task
+indices = ~scRobust.adata.obs['label'].isin(['co-expression','unclassified endocrine']).values
+scRobust.adata = scRobust.adata[indices]
+
+n_classes = len(scRobust.adata.obs['label'].cat.categories)
+scRobust.set_downstream_model(hidden = 64*8, n_clssses = n_classes, att_dropout = 0.3)
+
+val_auc, val_loss, val_f1, val_acc, \
+        test_auc, test_loss, test_f1, test_acc = scRobust.train_DS(epoch = 20, lr = 5e-5, batch_size = 64, n_ge = 800)
+
 ```
 <img src="https://github.com/DMCB-GIST/scRobust/assets/31497898/00649a67-6005-45b3-8245-6a63c5c37504" alt="cell_embeddings_cell_types" width="600"/>
 
