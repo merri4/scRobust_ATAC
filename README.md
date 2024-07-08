@@ -7,7 +7,7 @@ https://zenodo.org/records/10602754
 # Weights
 https://zenodo.org/records/10608134
 
-## Tutorial
+# Tutorial
 ```sh
 from scRobust import *
 
