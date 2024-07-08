@@ -33,7 +33,7 @@ scRobust_adata.obs['label'] = scRobust.adata.obs['label']
 sc.pl.tsne(scRobust_adata, color='label')
 sc.pl.tsne(scRobust_adata, color=['leiden'])
 ```
-![cell_embeddings_cell_types](https://github.com/DMCB-GIST/scRobust/assets/31497898/00649a67-6005-45b3-8245-6a63c5c37504)
+<img src="https://github.com/DMCB-GIST/scRobust/assets/31497898/00649a67-6005-45b3-8245-6a63c5c37504" alt="cell_embeddings_cell_types" width="600"/>
 
 # Overview
 ![Figure1-8](https://github.com/DMCB-GIST/scRobust/assets/31497898/2ec9e5cc-177a-454f-8ce2-6dbdf89b83cb)
