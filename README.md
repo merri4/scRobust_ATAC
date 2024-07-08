@@ -8,6 +8,7 @@ https://zenodo.org/records/10602754
 https://zenodo.org/records/10608134
 
 ## Tutorial
+```sh
 from scRobust import *
 import scanpy as sc
 import pandas as pd
