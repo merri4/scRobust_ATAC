@@ -19,10 +19,11 @@ scRobust.read_adata(adata_dict)
 gene_vocab, tokenizer = scRobust.set_vocab()
 
 scRobust.set_encoder(hidden = 64*8, n_layers = 1, attn_heads= 8)
-scRobust.set_pretraining_model(hidden = 64*8, att_dropout = 0.3)
 
 ## pre_train scRobust
+scRobust.set_pretraining_model(hidden = 64*8, att_dropout = 0.3)
 scRobust.train_SSL(epoch = 1000, lr = 0.00005, batch_size = 128, n_ge = 250, save_path = './weights/')
+
 ## load weight
 weight_path = './weights/Segerstolpe_CL_GE_BERT_Hid_512_Att_8_nGenes_200_ly_1_bt_128_encoder.pt'
 scRobust.load_encoder_weight(weight_path)
