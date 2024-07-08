@@ -8,7 +8,7 @@ https://zenodo.org/records/10602754
 https://zenodo.org/records/10608134
 
 # Tutorial
-with Python >= 2.1.2
+with Python >= 2.1.2, sklearn, scipy, scanpy
 
 ```sh
 from scRobust import *
