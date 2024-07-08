@@ -1,5 +1,6 @@
+#from collections import Counter 
+
 from scRobust import *
-from collections import Counter 
 import scanpy as sc
 import pandas as pd
 import numpy as np
@@ -17,8 +18,8 @@ scRobust.read_adata(adata_dict)
 gene_vocab, tokenizer = scRobust.set_vocab()
 
 d = 64; attn_heads = 8; hidden = d*attn_heads; n_layers = 1; n_ge = 250;
-
-scRobust.set_model(hidden = hidden, n_layers = n_layers, attn_heads= attn_heads)
+scRobust.set_encoder(hidden = 64*8, n_layers = 1, attn_heads= 8)
+scRobust.set_pretraining_model(hidden = 64*8, att_dropout = 0.3)
 
 save_path = './weights/'
 
@@ -29,7 +30,6 @@ weight_path = './weights/Segerstolpe_CL_GE_BERT_Hid_512_Att_8_nGenes_200_ly_1_bt
 scRobust.load_encoder_weight(weight_path)
 
 cell_embeddings = scRobust.get_cell_embeddings(n_ge = 400, batch_size = 64)
-
 scRobust_adata = scRobust.get_cell_adata(cell_embeddings, umap = False, tsne = True, leiden = True, 
                                          n_comps = 50, n_neighbors=10, n_pcs=50)
 
@@ -78,3 +78,14 @@ sc.tl.leiden(sc_adata)
 sc.pl.tsne(sc_adata, color='HbA1c')    
 sc.pl.tsne(sc_adata, color='cell_types')    
 sc.pl.tsne(sc_adata, color='sample_ids')    
+
+
+## Downstream task
+indices = ~scRobust.adata.obs['label'].isin(['co-expression','unclassified endocrine']).values
+scRobust.adata = scRobust.adata[indices]
+
+n_classes = len(scRobust.adata.obs['label'].cat.categories)
+scRobust.set_downstream_model(hidden = 64*8, n_clssses = n_classes, att_dropout = 0.3)
+
+total_val_auc, total_val_loss, total_val_f1, total_val_acc, \
+        total_test_auc, total_test_loss, total_test_f1, total_test_acc = scRobust.train_DS(epoch = 20, lr = 5e-5, batch_size = 64, n_ge = 800)

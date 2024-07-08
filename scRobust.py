@@ -7,9 +7,12 @@ from utils import *
 from models import *
 from random import choices
 from sklearn.model_selection import ShuffleSplit
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, StratifiedKFold
 from torch.utils.data import TensorDataset, DataLoader
 import torch
+
+from sklearn.metrics import precision_score, recall_score, f1_score, accuracy_score,\
+                            roc_auc_score, confusion_matrix, precision_recall_curve
 
 class scRobust():
     def __init__(self, device = 'cpu'):
@@ -45,15 +48,23 @@ class scRobust():
         
         return self.data_df
     
-    def set_model(self, hidden, n_layers, attn_heads, att_dropout = 0.3):
+    def set_encoder(self, hidden, n_layers, attn_heads):
         self.embedding = Gene_Embedding(vocab_size=self.vocab_size, embed_size=hidden)
         self.encoder = GeneBERT(embedding = self.embedding, hidden=hidden, n_layers= n_layers, attn_heads=attn_heads)
         
+        return self.encoder
+    
+    def set_pretraining_model(self, hidden, att_dropout = 0.3):
         self.model = CL_GE_BERT(y_dim = hidden, dropout_ratio = att_dropout,
                            device = self.device, encoder = self.encoder).to(self.device)
         
         return self.model
     
+    def set_downstream_model(self, hidden, n_clssses, att_dropout = 0.3):
+        self.model = Downstream_BERT(y_dim = hidden, o_dim = n_clssses, dropout_ratio = att_dropout,
+                           device = self.device, encoder = self.encoder).to(self.device)
+        
+        return self.model
         
     def read_adata(self, adata_path = '', set_self = True, normalize_total = True, log1p = True, min_genes = 1, min_cells = 1):
         adata = sc.read_h5ad(adata_path)
@@ -209,6 +220,227 @@ class scRobust():
                 
         return train_cl_loss, train_ge_loss, test_cl_loss, test_ge_loss
     
+    def get_labels(self, ):
+        label_codes = list(set(self.adata.obs['label']))
+        label_codes.sort()
+        labels = np.array([label_codes.index(self.adata.obs['label'][i]) for i in range(len(self.adata.obs['label']))])
+        
+        return labels
+    
+    def train_DS(self, epoch = 20, lr = 5e-5, batch_size = 64, n_ge = 800):
+        self.data_df = self.set_df(self.adata)
+        self.set_vocab()
+            
+        self.data_df = self.sorted_by_highly_unique_genes(self.data_df)
+        self.transform_data_df()
+        self.data_df[4] = 0.
+        
+        labels = self.get_labels()
+        
+        all_genes = self.data_df.columns
+        index_range = np.array(range(len(all_genes)))
+        
+        all_cells = self.data_df.index
+        
+        loss_fun = torch.nn.CrossEntropyLoss()
+        kfold = StratifiedKFold(n_splits=5, shuffle=True)
+        
+        total_val_auc = []; total_val_loss = []; total_val_f1 = []; total_val_acc = []
+        total_test_auc = []; total_test_loss = []; total_test_f1 = []; total_test_acc = []
+        
+        fold = 0; 
+        for train_index, test_index in kfold.split(all_cells, labels):
+            fold += 1;
+            
+            try:
+                train_index, val_index = train_test_split(train_index,test_size = 0.1, stratify = labels.iloc[train_index])
+            except:
+                train_index, val_index = train_test_split(train_index,test_size = 0.1)
+                
+            train_ds = TensorDataset(torch.tensor(self.data_df.iloc[train_index].values),
+                                     torch.tensor(labels[train_index]))
+            
+            val_ds = TensorDataset(torch.tensor(self.data_df.iloc[val_index].values),
+                                   torch.tensor(labels[val_index]))
+            
+            test_ds = TensorDataset(torch.tensor(self.data_df.iloc[test_index].values),
+                                    torch.tensor(labels[test_index]))
+            
+            train_dataloader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
+            val_dataloader = DataLoader(val_ds, batch_size=batch_size, shuffle=False)
+            test_dataloader = DataLoader(test_ds, batch_size=batch_size, shuffle=False)
+           
+            optimizer = torch.optim.Adam(self.model.parameters(), lr=lr) #0.00005
+            
+            
+            train_auc = []; test_auc = []; val_auc = [];              
+            train_f1 = []; test_f1 = []; val_f1 = []; train_acc = []; test_acc = [];val_acc = [];                        
+            train_acc = []; val_acc = []; test_acc = []; 
+            train_loss = []; val_loss = []; test_loss = []; 
+        
+            best_error = 100;
+            
+            for ep in range(epoch):
+                self.model.train();
+                step =0; sum_loss = 0.0; count = 0; accuracy = 0; 
+                all_y = []; all_pred_y = []; all_prob_y = [];
+                for ge_values, y in train_dataloader:
+                    n_samples = len(ge_values)
+                    optimizer.zero_grad(); step +=1;
+                    
+                    y = y.to(self.device, dtype=torch.int64)
+                    
+                    ge_values = ge_values.numpy()
+                    
+                    rand_index = [[-2]+index_range[ge_values[i]!=0][:n_ge].tolist()
+                                  if sum(ge_values[i]!=0) > n_ge
+                                  else [-2] + index_range[ge_values[i]!=0].tolist()+[-1]*(n_ge-sum(ge_values[i]!=0))
+                                  for i in range(len(ge_values))]
+                    
+                    rand_genes = [all_genes[rand_index[i]].tolist() for i in range(len(ge_values))]
+                    rand_scales = [ge_values[i][rand_index[i]] for i in range(len(ge_values))]
+                    
+                    x_genes = torch.tensor(rand_genes).to(self.device); 
+                    x_scales = torch.tensor(rand_scales, dtype=torch.float).to(self.device);
+                    
+                    pred_y = self.model(x_genes,x_scales)
+                    
+                    soft_y = F.softmax(pred_y,dim = 1)
+                    prob, predicted = torch.max(soft_y, 1)
+                    
+                    acc = (predicted == y).sum().item()
+                    accuracy += acc
+                
+                    loss = loss_fun(pred_y,y)
+                
+                    loss.backward(); optimizer.step();
+                    
+                    sum_loss += loss.item(); count += len(y)
+    
+                    all_prob_y.append(soft_y.cpu().detach().numpy())
+                    all_y += list(y.cpu().detach().numpy())
+                    all_pred_y += list(predicted.cpu().detach().numpy())
+                    
+                    if (step+1) %100 ==0:
+                        print('Step ', step, ' Acc: ', acc/len(y))
+                    
+                    
+                loss_train = sum_loss/(step+1)
+                ACC = accuracy/count
+                weighted_F1 = f1_score(all_y, all_pred_y, average='weighted')
+                F1 = f1_score(all_y, all_pred_y, average='macro')
+                
+                try:
+                    AUC = roc_auc_score(all_y, np.concatenate(all_prob_y), average='weighted', multi_class = 'ovo')
+                except:
+                    AUC = 1
+                    
+                print("Epoch: ", ep, "Train ACC: ", ACC, "Train F1: ", F1, "Train AUC: ", AUC, "Train weighted F1: ", weighted_F1)
+                train_acc.append(ACC); train_f1.append(F1); train_auc.append(AUC); train_loss.append(loss_train)
+                
+                self.model.eval();
+                step =0; sum_loss = 0.0; count = 0; accuracy = 0; 
+                all_prob_y = []; all_y = []; all_pred_y = [];
+                for ge_values, y in val_dataloader:
+                    step +=1; ge_values = ge_values.numpy()
+                    y = y.to(self.device, dtype=torch.int64)
+                    
+                    rand_index = [[-2]+index_range[ge_values[i]!=0][:n_ge].tolist()
+                                  if sum(ge_values[i]!=0) > n_ge
+                                  else [-2] + index_range[ge_values[i]!=0].tolist()+[-1]*(n_ge-sum(ge_values[i]!=0))
+                                  for i in range(len(ge_values))]
+                    
+                    rand_genes = [all_genes[rand_index[i]].tolist() for i in range(len(ge_values))]
+                    rand_scales = [ge_values[i][rand_index[i]] for i in range(len(ge_values))]
+                        
+                    x_genes = torch.tensor(rand_genes).to(self.device); x_scales = torch.tensor(rand_scales).to(self.device);
+                    
+                    pred_y = self.model(x_genes,x_scales)
+                    soft_y = F.softmax(pred_y,dim = 1)
+                    prob, predicted = torch.max(soft_y, 1)
+                    accuracy += (predicted == y).sum().item()
+                
+                    loss = loss_fun(pred_y,y)
+                    sum_loss += loss.item(); count += len(y)
+                    
+                    all_prob_y.append(soft_y.cpu().detach().numpy())
+                    all_y += list(y.cpu().detach().numpy())
+                    all_pred_y += list(predicted.cpu().detach().numpy())
+                    
+                loss_val = sum_loss/(step+1)
+                ACC = accuracy/count
+                weighted_F1 = f1_score(all_y, all_pred_y, average='weighted')
+                F1 = f1_score(all_y, all_pred_y, average='macro')
+                try:
+                    AUC = roc_auc_score(all_y, np.concatenate(all_prob_y), average='weighted', 
+                                        multi_class = 'ovo')#, labels = np.array(range(33)))
+                except:
+                    AUC = 1
+                    
+                print("Val ACC: ", ACC, "Val F1: ", F1, "Val AUC: ", AUC, "Val weighted F1: ", weighted_F1)
+                val_acc.append(ACC); val_f1.append(F1); val_auc.append(AUC); val_loss.append(loss_val)
+                
+                self.model.eval();
+                step =0; sum_loss = 0.0; count = 0; accuracy = 0;
+                all_prob_y = []; all_y = []; all_pred_y = [];
+                for ge_values, y in test_dataloader:
+                    step +=1;ge_values = ge_values.numpy()
+                    y = y.to(self.device, dtype=torch.int64)
+                    
+                    rand_index = [[-2]+index_range[ge_values[i]!=0][:n_ge].tolist()
+                                  if sum(ge_values[i]!=0) > n_ge
+                                  else [-2] + index_range[ge_values[i]!=0].tolist()+[-1]*(n_ge-sum(ge_values[i]!=0))
+                                  for i in range(len(ge_values))]
+                    
+                    rand_genes = [all_genes[rand_index[i]].tolist() for i in range(len(ge_values))]
+                    rand_scales = [ge_values[i][rand_index[i]] for i in range(len(ge_values))]
+                            
+                    x_genes = torch.tensor(rand_genes).to(self.device); x_scales = torch.tensor(rand_scales).to(self.device);
+                    
+                    pred_y = self.model(x_genes,x_scales)
+                    
+                    soft_y = F.softmax(pred_y,dim = 1)
+                    
+                    prob, predicted = torch.max(soft_y, 1)
+                    
+                    accuracy += (predicted == y).sum().item()
+                
+                    loss = loss_fun(pred_y,y)
+                    
+                    sum_loss += loss.item(); count += len(y)
+    
+                    all_prob_y.append(soft_y.cpu().detach().numpy())
+                    all_y += list(y.cpu().detach().numpy())
+                    all_pred_y += list(predicted.cpu().detach().numpy())
+                
+                all_prob_y = np.concatenate(all_prob_y)
+                target_probs, _ = torch.max(torch.tensor(all_prob_y),dim=1)
+                
+                loss_test = sum_loss/(step+1)
+                ACC = accuracy/count
+                weighted_F1 = f1_score(all_y, all_pred_y, average='weighted')
+                F1 = f1_score(all_y, all_pred_y, average='macro')
+                
+                try:
+                    AUC = roc_auc_score(all_y, all_prob_y, average='weighted', multi_class = 'ovo')
+                except:
+                    AUC = 1
+                    
+                print("Test ACC: ", ACC, "Test F1: ", F1, "Test AUC: ", AUC, "Test weighted F1: ", weighted_F1)
+                test_acc.append(ACC); test_f1.append(F1); test_auc.append(AUC); test_loss.append(loss_test)
+                
+            best_index = np.argsort(val_f1)[-1]
+            
+            AUC = val_auc[best_index]; loss = val_loss[best_index]; F1 = val_f1[best_index]; ACC = val_acc[best_index]; 
+            total_val_auc.append(AUC); total_val_loss.append(loss); total_val_f1.append(F1); total_val_acc.append(ACC)
+            
+            AUC = test_auc[best_index]; loss = test_loss[best_index]; F1 = test_f1[best_index]; ACC = test_acc[best_index]; 
+            total_test_auc.append(AUC); total_test_loss.append(loss); total_test_f1.append(F1);total_test_acc.append(ACC)
+            
+        return total_val_auc, total_val_loss, total_val_f1, total_val_acc, \
+                total_test_auc, total_test_loss, total_test_f1, total_test_acc
+            
+            
     def load_encoder_weight(self, weight_path):
         state_dict = torch.load(weight_path)
         self.encoder.load_state_dict(state_dict)
