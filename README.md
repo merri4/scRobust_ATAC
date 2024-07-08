@@ -8,6 +8,8 @@ https://zenodo.org/records/10602754
 https://zenodo.org/records/10608134
 
 # Tutorial
+with Python >= 2.1.2
+
 ```sh
 from scRobust import *
 
