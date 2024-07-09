@@ -16,8 +16,8 @@ from scRobust import *
 cuda_condition = torch.cuda.is_available()
 device = torch.device("cuda:1" if cuda_condition else "cpu")
 scRobust = scRobust(device)
-adata_dict = './data/Processed_Filtered_Segerstolpe_HumanPancreas_data.h5ad'
-scRobust.read_adata(adata_dict)
+adata_path = './data/Processed_Filtered_Segerstolpe_HumanPancreas_data.h5ad'
+scRobust.read_adata(adata_path)
 gene_vocab, tokenizer = scRobust.set_vocab()
 
 scRobust.set_encoder(hidden = 64*8, n_layers = 1, attn_heads= 8)
