@@ -6,6 +6,7 @@ https://zenodo.org/records/10602754
 
 # Weights
 https://zenodo.org/records/10608134
+https://zenodo.org/records/12741301
 
 # Tutorial
 with Python >= 2.1.2, sklearn, scipy, scanpy
