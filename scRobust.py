@@ -19,7 +19,7 @@ class scRobust():
         super().__init__()
         self.device = device
         self.adata = None
-        self.data_df = None#copy.deepcopy(data_df)
+        self.data_df = None #copy.deepcopy(data_df)
         self.gene_vocab = None
         self.tokenizer = None
         self.vocab_size = None
@@ -27,6 +27,13 @@ class scRobust():
         self.encoder = None
         self.model = None
     
+    def load_vocab(self,vocab_path):
+        self.gene_vocab = pd.read_csv(vocab_path)
+        self.tokenizer = Tokenizer2(self.gene_vocab)
+        self.vocab_size = self.gene_vocab.shape[0]
+        
+        return self.gene_vocab, self.tokenizer
+        
     def set_vocab(self):
         self.gene_vocab = pd.DataFrame(data = ['PAD', 'SEP', 'UNKWON', 'CLS', 'MASK']+
                                                self.data_df.columns.tolist())
@@ -87,6 +94,10 @@ class scRobust():
         self.data_df = pd.DataFrame(data = X.toarray(), columns = adata.var.index, index = adata.obs.index)
         self.data_df = self.data_df[self.data_df.columns.sort_values()]
         
+        if self.gene_vocab is not None:
+            common_genes = list(set(self.data_df.columns).intersection(self.gene_vocab['SYMBOL']))
+            self.data_df = self.data_df[common_genes]
+            
         return self.data_df
         
     def df_2_adata(self, df, normalize_total = True, log1p = True, min_genes = 1, min_cells = 1):
@@ -106,8 +117,19 @@ class scRobust():
 
         return data_df
     
+    def sorted_by_HVGs(self, data_df):
+        std = np.std(data_df)
+        data_df = data_df[std.sort_values(ascending = False).index]
+        
+        return data_df
     
-    def train_SSL(self, epoch = 1000, lr = 0.00005, batch_size = 128, n_ge = 250, save_path = './'):
+    
+    def train_SSL(self, epoch = 1000, lr = 0.00005, batch_size = 128, n_ge = 250, save_path = './', pooling = ''):
+        sum_pooling = False; max_pooling = False; mean_pooling = False
+        if pooling == 'sum': sum_pooling = True
+        if pooling == 'max': max_pooling = True
+        if pooling == 'mean': mean_pooling = True
+        
         
         self.data_df = self.set_df(self.adata)
         self.transform_data_df()
@@ -158,7 +180,9 @@ class scRobust():
                 ge_x_genes = x_genes[n_samples:,:]
                 ge_x_scales = x_scales[n_samples:,:]
                 
-                logits, labels, pred_y = self.model(x_genes,x_scales, ge_x_genes)
+                
+                logits, labels, pred_y = self.model(x_genes,x_scales, ge_x_genes, sum_pooling = sum_pooling,
+                                                    max_pooling = max_pooling, mean_pooling = mean_pooling)
                 
                 ge_loss = mse_fun(pred_y, ge_x_scales)
                 cl_loss = ce_fun(logits, labels)
@@ -172,7 +196,7 @@ class scRobust():
                 
                     
             cl_loss = sum_cl_loss/(step+1); ge_loss = sum_ge_loss/(step+1);
-            print("Train cl_loss: ", cl_loss);  print("Train ge_loss: ", ge_loss);  
+            print("Epoch:",ep," Train cl_loss: ", round(cl_loss,4), "Train ge_loss: ", round(ge_loss,4));  
             train_cl_loss.append(cl_loss); train_ge_loss.append(ge_loss);
                 
             self.model.eval(); step =0; sum_cl_loss = 0.0; sum_ge_loss = 0.0;
@@ -191,7 +215,9 @@ class scRobust():
                 ge_x_genes = x_genes[n_samples:,:]
                 ge_x_scales = x_scales[n_samples:,:]
                 
-                logits, labels, pred_y = self.model(x_genes, x_scales, ge_x_genes)
+                logits, labels, pred_y = self.model(x_genes,x_scales, ge_x_genes, sum_pooling = sum_pooling,
+                                                    max_pooling = max_pooling, mean_pooling = mean_pooling)
+                
                 
                 ge_loss = mse_fun(pred_y, ge_x_scales)
                 cl_loss = ce_fun(logits, labels)
@@ -201,7 +227,7 @@ class scRobust():
                 
                     
             cl_loss = sum_cl_loss/(step+1); ge_loss = sum_ge_loss/(step+1);
-            print("Test cl_loss: ", cl_loss);  print("Test ge_loss: ", ge_loss);  
+            print("Epoch:",ep," Test cl_loss: ", round(cl_loss,4), "Test ge_loss: ", round(ge_loss,4));  
             test_cl_loss.append(cl_loss); test_ge_loss.append(ge_loss);
                 
             if best_loss > test_cl_loss[-1]:
@@ -214,11 +240,13 @@ class scRobust():
                 self.model = self.model.to(self.device)
             
             
-            if test_cl_loss[-1] > train_cl_loss[-1]: stop_count += 1
-            if stop_count > 10: break;
+            #if test_cl_loss[-1] > train_cl_loss[-1]: stop_count += 1
+            #if stop_count > 10: break;
             
                 
         return train_cl_loss, train_ge_loss, test_cl_loss, test_ge_loss
+    
+    
     
     def get_labels(self, ):
         label_codes = list(set(self.adata.obs['label']))
@@ -227,19 +255,22 @@ class scRobust():
         
         return labels
     
-    def train_DS(self, epoch = 20, lr = 5e-5, batch_size = 64, n_ge = 800):
+    def train_DS(self, epoch = 20, lr = 5e-5, batch_size = 64, n_ge = 800, pooling = ''):
+        sum_pooling = False; max_pooling = False; mean_pooling = False
+        if pooling == 'sum': sum_pooling = True
+        if pooling == 'max': max_pooling = True
+        if pooling == 'mean': mean_pooling = True
+        
         self.data_df = self.set_df(self.adata)
-        self.set_vocab()
+        #self.set_vocab()
             
         self.data_df = self.sorted_by_highly_unique_genes(self.data_df)
         self.transform_data_df()
         self.data_df[4] = 0.
         
         labels = self.get_labels()
-        
         all_genes = self.data_df.columns
         index_range = np.array(range(len(all_genes)))
-        
         all_cells = self.data_df.index
         
         loss_fun = torch.nn.CrossEntropyLoss()
@@ -259,10 +290,8 @@ class scRobust():
                 
             train_ds = TensorDataset(torch.tensor(self.data_df.iloc[train_index].values),
                                      torch.tensor(labels[train_index]))
-            
             val_ds = TensorDataset(torch.tensor(self.data_df.iloc[val_index].values),
                                    torch.tensor(labels[val_index]))
-            
             test_ds = TensorDataset(torch.tensor(self.data_df.iloc[test_index].values),
                                     torch.tensor(labels[test_index]))
             
@@ -321,8 +350,7 @@ class scRobust():
                     all_y += list(y.cpu().detach().numpy())
                     all_pred_y += list(predicted.cpu().detach().numpy())
                     
-                    if (step+1) %100 ==0:
-                        print('Step ', step, ' Acc: ', acc/len(y))
+                    if (step+1) %100 ==0: print('Step ', step, ' Acc: ', acc/len(y))
                     
                     
                 loss_train = sum_loss/(step+1)
@@ -439,24 +467,25 @@ class scRobust():
             
         return total_val_auc, total_val_loss, total_val_f1, total_val_acc, \
                 total_test_auc, total_test_loss, total_test_f1, total_test_acc
-            
+        
+        
             
     def load_encoder_weight(self, weight_path):
         state_dict = torch.load(weight_path)
-        self.encoder.load_state_dict(state_dict)
+        self.encoder.load_state_dict(state_dict, strict = False)
     
     def load_model_weight(self, weight_path):
         state_dict = torch.load(weight_path)
-        self.model.load_state_dict(state_dict)
+        self.model.load_state_dict(state_dict, strict = False)
     
-    def get_cell_embeddings(self, adata = False, n_ge = 400, batch_size = 64):
+    def get_cell_embeddings(self, n_ge = 400, batch_size = 64, use_HUGs = True, use_HVGs = False, pooling = ''):
         
-        if adata: self.adata = adata
-            
         self.data_df = self.set_df(self.adata)
-        self.set_vocab()
-            
-        self.data_df = self.sorted_by_highly_unique_genes(self.data_df)
+        #self.set_vocab()
+        if use_HUGs:
+            self.data_df = self.sorted_by_highly_unique_genes(self.data_df)
+        elif use_HVGs:
+            self.data_df = self.sorted_by_HVGs(self.data_df)
         
         self.transform_data_df()
         self.data_df[4] = 0.
@@ -484,7 +513,15 @@ class scRobust():
                                 
             x_genes = torch.tensor(rand_genes).to(self.device); x_scales = torch.tensor(rand_scales).to(self.device);
             
-            x = self.encoder(x_genes,x_scales)[:,0,:]
+            if pooling == 'sum':
+                x = torch.sum(self.encoder(x_genes,x_scales),axis = 1)
+            elif pooling == 'max':
+                x = torch.max(self.encoder(x_genes,x_scales),axis = 1)[0]
+            elif pooling == 'mean':
+                x = torch.mean(self.encoder(x_genes,x_scales),axis = 1)
+            else:
+                x = self.encoder(x_genes,x_scales)[:,0,:]
+                
             xs.append(x.cpu().detach().numpy())
         
         cell_embeddings = np.concatenate(xs)
