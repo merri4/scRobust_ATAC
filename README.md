@@ -80,7 +80,7 @@ scRo.adata.X = np.expm1(scRo.adata.X)
 sc.pp.normalize_total(scRo.adata, target_sum=1e4)
 sc.pp.log1p(scRo.adata)
 
-d = 64; attn_heads = 8; hidden = d*attn_heads; n_layers = 0; n_ge = 400;
+d = 64; attn_heads = 8; hidden = d*attn_heads; n_layers = 8; n_ge = 400;
 scRo.set_encoder(hidden = 64*8, n_layers = n_layers, attn_heads= 8)
 scRo.set_pretraining_model(hidden = 64*8, att_dropout = 0.3)
 
