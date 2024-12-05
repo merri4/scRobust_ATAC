@@ -32,7 +32,7 @@ weight_path = './weights/Segerstolpe_CL_GE_BERT_Hid_512_Att_8_nGenes_200_ly_1_bt
 scRo.load_encoder_weight(weight_path)
 
 ## get cell embeddings
-cell_embeddings = scRo.get_cell_embeddings(n_ge = 400, batch_size = 64)
+cell_embeddings = scRo.get_cell_embeddings(n_ge = 1000, batch_size = 64)
 scRobust_adata = scRo.get_cell_adata(cell_embeddings, umap = False, tsne = True, leiden = True, n_comps = 50, n_neighbors=10, n_pcs=50)
 
 scRobust_adata.obs['label'] = scRo.adata.obs['label']
