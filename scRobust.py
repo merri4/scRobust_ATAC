@@ -332,7 +332,8 @@ class scRobust():
                     x_genes = torch.tensor(rand_genes).to(self.device); 
                     x_scales = torch.tensor(rand_scales, dtype=torch.float).to(self.device);
                     
-                    pred_y = self.model(x_genes,x_scales)
+                    pred_y = self.model(x_genes,x_scales, sum_pooling = sum_pooling,
+                                        max_pooling = max_pooling, mean_pooling = mean_pooling)
                     
                     soft_y = F.softmax(pred_y,dim = 1)
                     prob, predicted = torch.max(soft_y, 1)
@@ -480,6 +481,7 @@ class scRobust():
     
     def get_cell_embeddings(self, n_ge = 400, batch_size = 64, use_HUGs = True, use_HVGs = False, pooling = ''):
         
+        self.model.eval()
         self.data_df = self.set_df(self.adata)
         #self.set_vocab()
         if use_HUGs:
@@ -543,7 +545,49 @@ class scRobust():
         
         return scRobust_adata
     
+    def cell_type_annotation_with_pathway(self,pathway_dict):
+                
+        n_samples = self.adata.obs.shape[0]
+        
+        pathway_xs = []
+        dot_data = []
+        for i in pathway_dict:
+            pathway_genes = pathway_dict[i]
+            
+            pathway_ids = [1]+self.tokenizer.convert_symb_to_id(set(self.adata.var.index).intersection(pathway_genes))
+            pathway_ids = np.array(pathway_ids)
+            pathway_ids = pathway_ids[pathway_ids!=2]
+            
+            x_scales = np.ones(len(pathway_ids))*1
+            x_genes = torch.tensor(pathway_ids).long().to(self.device)
+            x_scales = torch.tensor(x_scales).long().to(self.device)
+        
+            xs = self.encoder(x_genes.unsqueeze(0),x_scales.unsqueeze(0)).cpu().detach().numpy()[:,0,:][0]
+            
+            pathway_xs.append(xs)
+        
+            pathway_cells = []
+            batch_size = 64;
+            for batch in range(int(n_samples/batch_size)+1):
+                
+                if (batch+1)*batch_size < n_samples:
+                    x_scales = torch.tensor(self.data_df[pathway_ids].iloc[batch*batch_size:(batch+1)*batch_size].values).to(self.device);
+                    
+                else:
+                    x_scales = torch.tensor(self.data_df[pathway_ids].iloc[batch*batch_size:].values).to(self.device);
+                    
+                rand_genes = torch.tensor(pathway_ids).repeat(x_scales.shape[0])
+                
+                x_genes = rand_genes.reshape(x_scales.shape[0], len(pathway_ids)).to(self.device)
+                x = self.encoder(x_genes,x_scales).cpu().detach().numpy()[:,0,:]
+                pathway_cells.append(x)
+            
+            pathway_cells = np.concatenate(pathway_cells)
+            sims = np.dot(pathway_cells, xs)/np.dot(xs,xs)
+            
+            dot_data.append(sims)
+            
+        dot_df = pd.DataFrame(data = dot_data,index = list(pathway_dict.keys())).T
+        pred_y = np.array([list(pathway_dict.keys())[np.argmax(dot_df.iloc[i])] for i in range(dot_df.shape[0])])
     
-
-        
-        
+        return dot_df, pred_y
