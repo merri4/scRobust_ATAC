@@ -4,6 +4,8 @@ The robust self-supervised learning strategy to tackle the inherent sparsity of 
 # Datasets
 [Preprocessed datasets](https://zenodo.org/records/10602754)
 
+[Whole human datasets](https://github.com/bowang-lab/scGPT/tree/main/data/cellxgene)
+
 # Weights
 [Large scRobust pre-trained on the whole human](https://zenodo.org/records/12741301)
 
