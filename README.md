@@ -5,8 +5,9 @@ The robust self-supervised learning strategy to tackle the inherent sparsity of 
 https://zenodo.org/records/10602754
 
 # Weights
-https://zenodo.org/records/10608134
-https://zenodo.org/records/12741301
+Pre-trained on the whole human: https://zenodo.org/records/10608134
+
+Pre-trained on each data: https://zenodo.org/records/12741301
 
 # Tutorial
 with Python >= 2.1.2, sklearn, scipy, scanpy
