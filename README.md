@@ -2,7 +2,7 @@
 The robust self-supervised learning strategy to tackle the inherent sparsity of single-cell RNA-seq data
 
 # Datasets
-[Zenodo](https://zenodo.org/records/10602754)
+[Preprocessed datasets](https://zenodo.org/records/10602754)
 
 # Weights
 [Large scRobust pre-trained on the whole human](https://zenodo.org/records/12741301)
