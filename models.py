@@ -2,13 +2,9 @@ import torch
 import torch.nn as nn
 
 import torch.nn.functional as F
-from torch.nn.parameter import Parameter
-from torch.nn.modules.module import Module
 import math
 
-from sklearn.utils import shuffle
 import collections
-import pandas as pd
 
 from model.transformer import TransformerBlock
 
@@ -17,8 +13,7 @@ class GELU(nn.Module):
         return 0.5 * x * (1 + torch.tanh(math.sqrt(2 / math.pi) * (x + 0.044715 * torch.pow(x, 3))))
 
 class Tokenizer2():
-    def __init__(
-        self, Gene_vocab, shuf= True, pad_token=0, sep_token=1, unk_token=2, cls_token=3, mask_token=4, **kwargs):
+    def __init__(self, Gene_vocab, shuf= True, pad_token=0, sep_token=1, unk_token=2, cls_token=3, mask_token=4, **kwargs) :
         super().__init__()
         self.Gene_vocab = Gene_vocab
         self.unk_token = unk_token
@@ -36,7 +31,7 @@ class Tokenizer2():
 
     @property
     def vocab_size(self):
-        return len(self.Gene_vacab)
+        return len(self.Gene_vocab)
 
     def get_vocab(self):
         return self.Gene_vocab
@@ -83,7 +78,7 @@ class GeneBERT(nn.Module):
         # paper noted they used 4*hidden_size for ff_network_hidden_size
         self.feed_forward_hidden = hidden * 4
 
-        self.embedding = embedding#
+        self.embedding = embedding
 
         # multi-layers transformer blocks, deep network
         self.transformer_blocks = nn.ModuleList(
@@ -223,8 +218,7 @@ class CL_BERT(torch.nn.Module):
         return logits, labels
 
 class CL_GE_BERT(torch.nn.Module):
-    def __init__(self, y_dim = 512, dropout_ratio = 0.3, temperature = 0.07,
-                 device = 'cpu', encoder = None):
+    def __init__(self, y_dim = 512, dropout_ratio = 0.3, temperature = 0.07, device = 'cpu', encoder = None) :
         super().__init__()
         self.device = device
         self.temperature = temperature

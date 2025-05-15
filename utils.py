@@ -1,19 +1,7 @@
-from sklearn.metrics import precision_score, recall_score, f1_score, accuracy_score,\
-                            roc_auc_score, confusion_matrix, precision_recall_curve
-import csv
+from sklearn.metrics import precision_score, recall_score, f1_score, accuracy_score, roc_auc_score, confusion_matrix, precision_recall_curve
 import pandas as pd
-import hickle as hkl
 import numpy as np
-import scipy.sparse as sp
-import sklearn.preprocessing as sk
-from sklearn.feature_selection import VarianceThreshold
-
 import matplotlib.pyplot as plt
-
-import torch
-
-import random, os
-
 import scanpy as sc
 from scipy.sparse import csr_matrix
 
@@ -111,7 +99,6 @@ def get_dataset(data_name):
     labels['y'] = [label_codes.index(labels['celltype'][i]) for i in range(len(labels))]
 
     return data_df, labels, gene_vocab, encoder_dict
-
 
 def get_zero_ratio_dataset(data_name, zero_ratio= 0.5):
     data_df, labels, gene_vocab, encoder_dict = None, None, None, None

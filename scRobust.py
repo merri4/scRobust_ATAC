@@ -2,17 +2,23 @@ import pandas as pd
 import numpy as np
 import scanpy as sc
 from scipy.sparse import csr_matrix
-#import copy
+
+import os
+
+# 지금 여기서 bert랑 transformer import하고있는거임? 그냥 huggingface에서 순정 TF 갖고오는게 낫지 않아?
 from utils import *
-from models import *
+from models import * 
+import h5py
+from tqdm import tqdm
+
 from random import choices
 from sklearn.model_selection import ShuffleSplit
 from sklearn.model_selection import train_test_split, StratifiedKFold
-from torch.utils.data import TensorDataset, DataLoader
+from sklearn.metrics import precision_score, recall_score, f1_score, accuracy_score, roc_auc_score, confusion_matrix, precision_recall_curve
+
+from torch.utils.data import TensorDataset, DataLoader, Dataset
 import torch
 
-from sklearn.metrics import precision_score, recall_score, f1_score, accuracy_score,\
-                            roc_auc_score, confusion_matrix, precision_recall_curve
 
 class scRobust():
     def __init__(self, device = 'cpu'):
@@ -62,9 +68,7 @@ class scRobust():
         return self.encoder
     
     def set_pretraining_model(self, hidden, att_dropout = 0.3):
-        self.model = CL_GE_BERT(y_dim = hidden, dropout_ratio = att_dropout,
-                           device = self.device, encoder = self.encoder).to(self.device)
-        
+        self.model = CL_GE_BERT(y_dim = hidden, dropout_ratio = att_dropout, device = self.device, encoder = self.encoder).to(self.device)
         return self.model
     
     def set_downstream_model(self, hidden, n_clssses, att_dropout = 0.3):
@@ -74,15 +78,29 @@ class scRobust():
         return self.model
         
     def read_adata(self, adata_path = '', set_self = True, normalize_total = True, log1p = True, min_genes = 1, min_cells = 1):
-        adata = sc.read_h5ad(adata_path)
         
-        if normalize_total: sc.pp.normalize_total(adata, target_sum=1e4)
-        if log1p: sc.pp.log1p(adata)
+        adata = sc.read_h5ad(adata_path)
+        # adata = h5py.File(adata_path, 'r', swmr=True)
+
+        print(adata)
+        # AnnData object with n_obs × n_vars = 31890 × 36601
+        # obs: 'batch', 'nCount_RNA', 'nFeature_RNA', 'percent_mt', 'nCount_ATAC', 'nFeature_ATAC', 'nucleosome_signal', 'nucleosome_percentile', 'TSS.enrichment', 'TSS.percentile', 'RNA.weight', 'ATAC.weight', 'wsnn_res.1', 'seurat_clusters', 'annot', 'annot.primary', 'annot.archive'
+        # obsm: 'X_pca', 'X_umap'
+        print(type(adata))
+        # <class 'anndata._core.anndata.AnnData'>
+        
+        if normalize_total :
+            sc.pp.normalize_total(adata, target_sum=1e4)
+        
+        if log1p :
+            sc.pp.log1p(adata)
+        
         sc.pp.filter_cells(adata, min_genes=min_genes)
         sc.pp.filter_genes(adata, min_cells=min_cells)
         
-        if set_self: 
-            self.set_adata(adata); self.set_df(adata); 
+        if set_self :
+            self.set_adata(adata)
+            self.set_df(adata)
         
         return adata
         
@@ -123,14 +141,24 @@ class scRobust():
         
         return data_df
     
-    
     def train_SSL(self, epoch = 1000, lr = 0.00005, batch_size = 128, n_ge = 250, save_path = './', pooling = ''):
-        sum_pooling = False; max_pooling = False; mean_pooling = False
-        if pooling == 'sum': sum_pooling = True
-        if pooling == 'max': max_pooling = True
-        if pooling == 'mean': mean_pooling = True
         
+        sum_pooling = False
+        max_pooling = False
+        mean_pooling = False
         
+        if pooling == 'sum':
+            sum_pooling = True
+        if pooling == 'max':
+            max_pooling = True
+        if pooling == 'mean':
+            mean_pooling = True
+        
+        # 저장 경로 생성
+        if not os.path.exists(save_path):
+            os.makedirs(save_path)
+
+        # 데이터셋 준비
         self.data_df = self.set_df(self.adata)
         self.transform_data_df()
         
@@ -139,114 +167,137 @@ class scRobust():
         
         all_cells = self.data_df.index
         
-        ce_fun = torch.nn.CrossEntropyLoss(); mse_fun = torch.nn.MSELoss();
-    
-        train_cells, test_cells = train_test_split(all_cells,test_size = 0.1)
-        train_df = self.data_df.loc[train_cells]; test_df = self.data_df.loc[test_cells]; 
+        train_cells, test_cells = train_test_split(all_cells, test_size = 0.1)
+        train_df = self.data_df.loc[train_cells]
+        test_df = self.data_df.loc[test_cells]
     
         train_ds = TensorDataset(torch.tensor(train_df.values))
         test_ds = TensorDataset(torch.tensor(test_df.values))
                     
         train_dataloader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
         test_dataloader = DataLoader(test_ds, batch_size=batch_size, shuffle=False)
+
+        # loss 설정
+        ce_fun = torch.nn.CrossEntropyLoss()
+        mse_fun = torch.nn.MSELoss()
         
+        train_cl_loss = []
+        test_cl_loss = []
+        train_ge_loss = []
+        test_ge_loss = []
         
+        # optimizer 설정
         optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
             
-        train_cl_loss = []; test_cl_loss = []; train_ge_loss = []; test_ge_loss = []; 
-            
-        best_loss = 100.
+        # early stopping
+        best_loss = 100. # 임의의 큰 숫자
         stop_count = 0
+
+        print("=================\nReady to run training!\n=================")
         
-        for ep in range(epoch):
+        for epoch in tqdm(range(1, epoch+1), desc="Training ") :
                 
-            step =0; sum_cl_loss = 0.0; sum_ge_loss = 0.0;
-            self.model.train();
-            for ge_values, in train_dataloader:
+            sum_cl_loss = 0.0
+            sum_ge_loss = 0.0
+            step = 0
+            self.model.train()
+
+            for step, (ge_values,) in enumerate(train_dataloader) :
               
                 n_samples = len(ge_values)
-                
-                optimizer.zero_grad(); step +=1;
-                
                 ge_values = ge_values.repeat(2,1).numpy()
                 
+                # 랜덤 인덱스 추출
                 rand_index = [[index_range[-1]] + choices(index_range[ge_values[i]!=0],k=n_ge) for i in range(len(ge_values))]
+
+                # 이 인덱스에 해당하는 
                 rand_genes = [all_genes[rand_index[i]].tolist() for i in range(len(ge_values))]
-                rand_scales = [ge_values[i][rand_index[i]] for i in range(len(ge_values))]
+                rand_scales = np.stack([ge_values[i][rand_index[i]] for i in range(len(ge_values))])
                 
-                x_genes = torch.tensor(rand_genes).to(self.device); 
-                x_scales = torch.tensor(rand_scales, dtype=torch.float).to(self.device);
+                x_genes = torch.tensor(rand_genes).to(self.device)
+                x_scales = torch.from_numpy(rand_scales.astype(np.float32)).to(self.device)
                 
                 ge_x_genes = x_genes[n_samples:,:]
                 ge_x_scales = x_scales[n_samples:,:]
                 
+                logits, labels, pred_y = self.model(x_genes, x_scales, ge_x_genes) # sum_pooling = sum_pooling, max_pooling = max_pooling, mean_pooling = mean_pooling)
                 
-                logits, labels, pred_y = self.model(x_genes,x_scales, ge_x_genes, sum_pooling = sum_pooling,
-                                                    max_pooling = max_pooling, mean_pooling = mean_pooling)
-                
+                # loss 계산 후 역전파
+                optimizer.zero_grad()
                 ge_loss = mse_fun(pred_y, ge_x_scales)
                 cl_loss = ce_fun(logits, labels)
-                
                 loss = ge_loss + cl_loss
                 loss.backward()
                 optimizer.step()
-                    
-                sum_cl_loss += cl_loss.item(); 
-                sum_ge_loss += ge_loss.item(); 
                 
-                    
-            cl_loss = sum_cl_loss/(step+1); ge_loss = sum_ge_loss/(step+1);
-            print("Epoch:",ep," Train cl_loss: ", round(cl_loss,4), "Train ge_loss: ", round(ge_loss,4));  
-            train_cl_loss.append(cl_loss); train_ge_loss.append(ge_loss);
-                
-            self.model.eval(); step =0; sum_cl_loss = 0.0; sum_ge_loss = 0.0;
+                # loss 기록
+                sum_cl_loss += cl_loss.item()
+                sum_ge_loss += ge_loss.item()
             
-            for ge_values, in test_dataloader:
-                n_samples = len(ge_values); step +=1;
+            # 
+            cl_loss = sum_cl_loss / (step+1)
+            ge_loss = sum_ge_loss / (step+1)
+            
+            train_cl_loss.append(cl_loss)
+            train_ge_loss.append(ge_loss)
+            
+            print(f"Epoch: {epoch} \t Train cl_loss: {cl_loss:.4f} \t Train ge_loss: {ge_loss:.4f}")
+
+
+
+            # Evaluate in every step
+            self.model.eval()
+            
+            sum_cl_loss = 0.0
+            sum_ge_loss = 0.0
+
+            for step, (ge_values, ) in enumerate(test_dataloader) :
+                
+                n_samples = len(ge_values)
                 ge_values = ge_values.repeat(2,1).numpy()
                 
                 rand_index = [[index_range[-1]] + choices(index_range[ge_values[i]!=0],k=n_ge) for i in range(len(ge_values))]
                 rand_genes = [all_genes[rand_index[i]].tolist() for i in range(len(ge_values))]
-                rand_scales = [ge_values[i][rand_index[i]] for i in range(len(ge_values))]
+                rand_scales = np.stack([ge_values[i][rand_index[i]] for i in range(len(ge_values))])
                 
-                x_genes = torch.tensor(rand_genes).to(self.device);
-                x_scales = torch.tensor(rand_scales, dtype=torch.float).to(self.device);
+                x_genes = torch.tensor(rand_genes).to(self.device)
+                x_scales = torch.from_numpy(rand_scales.astype(np.float32)).to(self.device)
                 
                 ge_x_genes = x_genes[n_samples:,:]
                 ge_x_scales = x_scales[n_samples:,:]
                 
-                logits, labels, pred_y = self.model(x_genes,x_scales, ge_x_genes, sum_pooling = sum_pooling,
-                                                    max_pooling = max_pooling, mean_pooling = mean_pooling)
-                
+                logits, labels, pred_y = self.model(x_genes, x_scales, ge_x_genes) # , sum_pooling = sum_pooling, max_pooling = max_pooling, mean_pooling = mean_pooling)
                 
                 ge_loss = mse_fun(pred_y, ge_x_scales)
                 cl_loss = ce_fun(logits, labels)
                    
-                sum_cl_loss += cl_loss.item(); 
-                sum_ge_loss += ge_loss.item(); 
+                sum_cl_loss += cl_loss.item()
+                sum_ge_loss += ge_loss.item()
                 
-                    
-            cl_loss = sum_cl_loss/(step+1); ge_loss = sum_ge_loss/(step+1);
-            print("Epoch:",ep," Test cl_loss: ", round(cl_loss,4), "Test ge_loss: ", round(ge_loss,4));  
-            test_cl_loss.append(cl_loss); test_ge_loss.append(ge_loss);
+            cl_loss = sum_cl_loss / (step+1)
+            ge_loss = sum_ge_loss / (step+1)
+
+            test_cl_loss.append(cl_loss)
+            test_ge_loss.append(ge_loss)
+            
+            print(f"Epoch: {epoch} \t Test cl_loss: {cl_loss:.4f} \t Test ge_loss: {ge_loss:.4f}")
+
+
+            # best loss에 갱신
+            if best_loss > test_cl_loss[-1] :
                 
-            if best_loss > test_cl_loss[-1]:
                 self.model = self.model.cpu()
-                best_loss = test_cl_loss[-1]                 
+                best_loss = test_cl_loss[-1]
                 
-                torch.save(self.model.state_dict(), save_path+'scRobust_model.pt')
-                torch.save(self.model.encoder.state_dict(), save_path+'scRobust_model_encoder.pt')
+                torch.save(self.model.state_dict(), save_path + 'scRobust_model.pth')
+                torch.save(self.model.encoder.state_dict(), save_path + 'scRobust_model_encoder.pth')
                     
                 self.model = self.model.to(self.device)
             
-            
-            #if test_cl_loss[-1] > train_cl_loss[-1]: stop_count += 1
-            #if stop_count > 10: break;
-            
-                
+            # if test_cl_loss[-1] > train_cl_loss[-1]: stop_count += 1
+            # if stop_count > 10: break;
+
         return train_cl_loss, train_ge_loss, test_cl_loss, test_ge_loss
-    
-    
     
     def get_labels(self, ):
         label_codes = list(set(self.adata.obs['label']))
@@ -255,7 +306,7 @@ class scRobust():
         
         return labels
     
-    def train_DS(self, epoch = 20, lr = 5e-5, batch_size = 64, n_ge = 800, pooling = ''):
+    def train_DS(self, epoch = 20, lr = 5e-5, batch_size = 64, n_ge = 800, pooling = '') :
         sum_pooling = False; max_pooling = False; mean_pooling = False
         if pooling == 'sum': sum_pooling = True
         if pooling == 'max': max_pooling = True
@@ -332,8 +383,7 @@ class scRobust():
                     x_genes = torch.tensor(rand_genes).to(self.device); 
                     x_scales = torch.tensor(rand_scales, dtype=torch.float).to(self.device);
                     
-                    pred_y = self.model(x_genes,x_scales, sum_pooling = sum_pooling,
-                                        max_pooling = max_pooling, mean_pooling = mean_pooling)
+                    pred_y = self.model(x_genes,x_scales, sum_pooling = sum_pooling, max_pooling = max_pooling, mean_pooling = mean_pooling)
                     
                     soft_y = F.softmax(pred_y,dim = 1)
                     prob, predicted = torch.max(soft_y, 1)
@@ -468,9 +518,7 @@ class scRobust():
             
         return total_val_auc, total_val_loss, total_val_f1, total_val_acc, \
                 total_test_auc, total_test_loss, total_test_f1, total_test_acc
-        
-        
-            
+
     def load_encoder_weight(self, weight_path):
         state_dict = torch.load(weight_path)
         self.encoder.load_state_dict(state_dict, strict = False)
