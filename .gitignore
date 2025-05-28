@@ -2,3 +2,7 @@
 /weights
 /__pycache__
 **/__pycache__/
+imsi.py
+/wandb
+*peaks*.csv
+/10x

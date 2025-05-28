@@ -23,9 +23,13 @@ class Tokenizer2():
         self.mask_token = mask_token
         self.shuf = shuf
 
-        self.special_tokens = {'UNKWON':self.unk_token, 'SEP':self.sep_token,
-                               'PAD':self.pad_token, 'CLS':self.cls_token,
-                               'MASK':self.mask_token}
+        self.special_tokens = {
+            'UNK' : self.unk_token,
+            'SEP' : self.sep_token,
+            'PAD' : self.pad_token,
+            'CLS' : self.cls_token,
+            'MASK': self.mask_token,
+            }
 
         self.symb_to_id = collections.OrderedDict([(SYMBOL, ID) for ID, SYMBOL in self.Gene_vocab.values])
 
@@ -81,6 +85,7 @@ class GeneBERT(nn.Module):
         self.embedding = embedding
 
         # multi-layers transformer blocks, deep network
+        # TODO : transformerBlock으로 되어있음! 이거 분해하기.
         self.transformer_blocks = nn.ModuleList(
                 [TransformerBlock(hidden, attn_heads, hidden * 4, dropout, layer_type='PFN') for i in range(n_layers)])
 

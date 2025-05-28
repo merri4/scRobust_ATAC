@@ -4,17 +4,17 @@ import scanpy as sc
 import pandas as pd
 import numpy as np
 import argparse
+import wandb
 
 # https://huggingface.co/datasets/UCSC-VLAA/MiniAtlas 데이터셋
 
 def parse_arguments() :
     parser = argparse.ArgumentParser(description='Argparse')
     
-    parser.add_argument('--data_path', type=str, default="./miniatlas/kidney_atlas_rna.h5ad")
+    parser.add_argument('--data_path', type=str, default="./miniatlas/pbmc_atlas_rna.h5ad")
     parser.add_argument('--save_path', type=str, default="./weights/")
     parser.add_argument('--model_path', type=str, default='./weights/Segerstolpe_CL_GE_BERT_Hid_512_Att_8_nGenes_200_ly_1_bt_128_encoder.pt')
     
-
     parser.add_argument('--seed', type=int, default=821)
     parser.add_argument('--mode', type=str, default="train")
     
@@ -23,10 +23,9 @@ def parse_arguments() :
     parser.add_argument('--embedding_dim', type=int, default=64)
     parser.add_argument('--num_gene', type=int, default=250)
     
-    parser.add_argument('--batch_size', type=int, default=128)
+    parser.add_argument('--batch_size', type=int, default=64)
     parser.add_argument('--lr', type=float, default=5e-5)
-    parser.add_argument('--epoch', type=int, default=1)
-
+    parser.add_argument('--epoch', type=int, default=50)
 
     parser.add_argument('--test_data_path', type=str, default="./data/seq_class.test.csv")
     parser.add_argument('--eval_step', type=int, default=20)
@@ -76,7 +75,6 @@ if __name__ == "__main__" :
     # 1.9G pbmc_atlas_rna.h5ad
     
 
-
     ### =======================================================================
     ### param setting
     ### =======================================================================    
@@ -86,7 +84,34 @@ if __name__ == "__main__" :
 
     ### Train
     if args.mode == "train" :
-        scRobust.train_SSL(epoch = args.epoch, lr = args.lr, batch_size = args.batch_size, n_ge = args.num_gene, save_path = args.save_path)
+        
+        wandb_logger = wandb.init(
+            project="scRobust",
+            config={
+                
+                # 시드
+                "seed" : args.seed,
+                
+                # learning hyperparam
+                "learning_rate": args.lr,
+                "epochs": args.epoch,
+                "batch_size": args.batch_size,
+                
+                # model hyperparam
+                "num_blocks" : args.num_blocks,
+                "num_heads" : args.num_heads,
+                "embedding_dim" : args.embedding_dim,
+                "num_gene": args.num_gene,
+                
+                # dataset
+                "dataset": args.data_path,
+
+            },
+        )
+        
+        scRobust.train_SSL(epoch = args.epoch, lr = args.lr, batch_size = args.batch_size, n_ge = args.num_gene, save_path = args.save_path, logger=wandb_logger)
+
+        wandb_logger.finish()
 
     ### Inference
     else :

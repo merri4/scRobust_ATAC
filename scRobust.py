@@ -20,7 +20,7 @@ from torch.utils.data import TensorDataset, DataLoader, Dataset
 import torch
 
 
-class scRobust():
+class scRobust() :
     def __init__(self, device = 'cpu'):
         super().__init__()
         self.device = device
@@ -41,8 +41,7 @@ class scRobust():
         return self.gene_vocab, self.tokenizer
         
     def set_vocab(self):
-        self.gene_vocab = pd.DataFrame(data = ['PAD', 'SEP', 'UNKWON', 'CLS', 'MASK']+
-                                               self.data_df.columns.tolist())
+        self.gene_vocab = pd.DataFrame(data = ['PAD', 'SEP', 'UNKWON', 'CLS', 'MASK'] + self.data_df.columns.tolist())
         self.gene_vocab = self.gene_vocab.reset_index()
         self.gene_vocab.columns = ['ID', 'SYMBOL']
         self.tokenizer = Tokenizer2(self.gene_vocab)
@@ -63,6 +62,7 @@ class scRobust():
     
     def set_encoder(self, hidden, n_layers, attn_heads):
         self.embedding = Gene_Embedding(vocab_size=self.vocab_size, embed_size=hidden)
+        self.chr_embedding = Gene_Embedding(vocab_size=25, embed_size=hidden) # chr1 - chr22, chrX, chrY, PAD
         self.encoder = GeneBERT(embedding = self.embedding, hidden=hidden, n_layers= n_layers, attn_heads=attn_heads)
         
         return self.encoder
@@ -72,12 +72,11 @@ class scRobust():
         return self.model
     
     def set_downstream_model(self, hidden, n_clssses, att_dropout = 0.3):
-        self.model = Downstream_BERT(y_dim = hidden, o_dim = n_clssses, dropout_ratio = att_dropout,
-                           device = self.device, encoder = self.encoder).to(self.device)
+        self.model = Downstream_BERT(y_dim = hidden, o_dim = n_clssses, dropout_ratio = att_dropout, device = self.device, encoder = self.encoder).to(self.device)
         
         return self.model
         
-    def read_adata(self, adata_path = '', set_self = True, normalize_total = True, log1p = True, min_genes = 1, min_cells = 1):
+    def read_adata(self, adata_path = '', set_self = True, normalize_total = True, log1p = True, min_genes = 200, min_cells = 3) :
         
         adata = sc.read_h5ad(adata_path)
         # adata = h5py.File(adata_path, 'r', swmr=True)
@@ -107,7 +106,7 @@ class scRobust():
     def set_adata(self, adata):
         self.adata = adata
         
-    def set_df(self, adata):
+    def set_df(self, adata) :
         X = csr_matrix(adata.X)
         self.data_df = pd.DataFrame(data = X.toarray(), columns = adata.var.index, index = adata.obs.index)
         self.data_df = self.data_df[self.data_df.columns.sort_values()]
@@ -141,7 +140,7 @@ class scRobust():
         
         return data_df
     
-    def train_SSL(self, epoch = 1000, lr = 0.00005, batch_size = 128, n_ge = 250, save_path = './', pooling = ''):
+    def train_SSL(self, epoch = 1000, lr = 0.00005, batch_size = 128, n_ge = 250, save_path = './', pooling = '', logger=None):
         
         sum_pooling = False
         max_pooling = False
@@ -194,6 +193,8 @@ class scRobust():
         stop_count = 0
 
         print("=================\nReady to run training!\n=================")
+
+        # model = nn.DataParallel(model)
         
         for epoch in tqdm(range(1, epoch+1), desc="Training ") :
                 
@@ -203,14 +204,14 @@ class scRobust():
             self.model.train()
 
             for step, (ge_values,) in enumerate(train_dataloader) :
-              
+
                 n_samples = len(ge_values)
-                ge_values = ge_values.repeat(2,1).numpy()
+                ge_values = ge_values.repeat(2,1).numpy() # duplicate 2 times in first dimension (row) and 1 times in second dimension (col)
                 
                 # 랜덤 인덱스 추출
                 rand_index = [[index_range[-1]] + choices(index_range[ge_values[i]!=0],k=n_ge) for i in range(len(ge_values))]
 
-                # 이 인덱스에 해당하는 
+                # 이 인덱스에 해당하는 것들 추출
                 rand_genes = [all_genes[rand_index[i]].tolist() for i in range(len(ge_values))]
                 rand_scales = np.stack([ge_values[i][rand_index[i]] for i in range(len(ge_values))])
                 
@@ -224,7 +225,7 @@ class scRobust():
                 
                 # loss 계산 후 역전파
                 optimizer.zero_grad()
-                ge_loss = mse_fun(pred_y, ge_x_scales)
+                ge_loss = mse_fun(pred_y, ge_x_scales) # TODO : 여기 cross entropy로 변경해두기
                 cl_loss = ce_fun(logits, labels)
                 loss = ge_loss + cl_loss
                 loss.backward()
@@ -242,8 +243,6 @@ class scRobust():
             train_ge_loss.append(ge_loss)
             
             print(f"Epoch: {epoch} \t Train cl_loss: {cl_loss:.4f} \t Train ge_loss: {ge_loss:.4f}")
-
-
 
             # Evaluate in every step
             self.model.eval()
@@ -282,6 +281,12 @@ class scRobust():
             
             print(f"Epoch: {epoch} \t Test cl_loss: {cl_loss:.4f} \t Test ge_loss: {ge_loss:.4f}")
 
+            logger.log({
+                "train_cl_loss" : train_cl_loss[-1],
+                "train_ge_loss" : train_ge_loss[-1],
+                "test_cl_loss" : test_cl_loss[-1],
+                "test_ge_loss" : test_ge_loss[-1],
+                })
 
             # best loss에 갱신
             if best_loss > test_cl_loss[-1] :
